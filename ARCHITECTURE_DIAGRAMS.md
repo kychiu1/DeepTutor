@@ -21,7 +21,8 @@ major feature of the system.
 10. [Memory System — Update & Cleanup (v1.3.2)](#10-memory-system--update--cleanup-v132)
 11. [TutorBot — Multi-Channel Autonomous Agent](#11-tutorbot--multi-channel-autonomous-agent)
 12. [Session & State Management](#12-session--state-management)
-13. [Module Dependency Hierarchy](#13-module-dependency-hierarchy)
+13. [Co-Writer — Document Editing & AI Assistance](#13-co-writer--document-editing--ai-assistance)
+14. [Module Dependency Hierarchy](#14-module-dependency-hierarchy)
 
 ---
 
@@ -684,7 +685,138 @@ flowchart TD
 
 ---
 
-## 13. Module Dependency Hierarchy
+## 13. Co-Writer — Document Editing & AI Assistance
+
+The Co-Writer module is a standalone writing workspace. It has two independent
+subsystems: document storage (CRUD) and AI-assisted editing (two modes).
+
+### 13a. Document Management
+
+```mermaid
+flowchart LR
+    subgraph Client["Client (Web UI)"]
+        REQ["CRUD request"]
+    end
+
+    subgraph Router["api/routers/co_writer.py"]
+        LIST["GET  /co_writer/documents"]
+        CREATE["POST /co_writer/documents"]
+        GET["GET  /co_writer/documents/{id}"]
+        UPDATE["PUT  /co_writer/documents/{id}"]
+        DELETE["DELETE /co_writer/documents/{id}"]
+    end
+
+    subgraph Store["CoWriterStorage — co_writer/storage.py"]
+        STOR["get_co_writer_storage()\nsingleton"]
+        TITLE["_derive_title()\nauto-title from first heading"]
+        PREV["_build_preview()\n160-char excerpt"]
+        ATOMIC["_atomic_write_json()\nwrite-temp + fsync + rename"]
+    end
+
+    subgraph FS["File System"]
+        DIR["data/user/workspace/co-writer/\ndocuments/doc_{id}/manifest.json"]
+    end
+
+    REQ --> LIST & CREATE & GET & UPDATE & DELETE
+    LIST & CREATE & GET & UPDATE & DELETE --> STOR
+    STOR --> TITLE & PREV & ATOMIC
+    ATOMIC --> FS
+```
+
+### 13b. Simple Edit (EditAgent)
+
+Fetches optional context (RAG or web search) then makes a single LLM call.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as co_writer.py router
+    participant EA as EditAgent
+    participant RAG as rag_search()
+    participant WEB as web_search()
+    participant LLM as LLM Service
+    participant CLN as clean_thinking_tags()
+    participant FS as history.json
+
+    C->>R: POST /co_writer/edit\n{text, instruction, action, source, kb_name}
+    R->>EA: agent.process(text, instruction, action, source, kb_name)
+
+    alt source == "rag"
+        EA->>RAG: rag_search(instruction, kb_name)
+        RAG-->>EA: context chunks
+        EA->>EA: save_tool_call(op_id, "rag", data)
+    else source == "web"
+        EA->>WEB: web_search(instruction)
+        WEB-->>EA: context + citations
+        EA->>EA: save_tool_call(op_id, "web", data)
+    end
+
+    EA->>EA: build system_prompt + user_prompt\n(action verb + optional context + text)
+    EA->>LLM: stream_llm(system_prompt, user_prompt, stage="edit_{action}")
+    LLM-->>EA: raw chunks[]
+    EA->>CLN: clean_thinking_tags(joined_chunks)
+    CLN-->>EA: edited_text
+
+    EA->>FS: append operation_record to history.json
+    EA-->>R: {edited_text, operation_id}
+    R-->>C: EditResponse
+```
+
+### 13c. ReAct Edit (react_edit) — AI-assisted with tool use
+
+Uses the full agentic pipeline with optional RAG, web search, brainstorm,
+paper search, and code execution tools. Supports both blocking and streaming
+response modes.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as co_writer.py router
+    participant EA as EditAgent (BaseAgent)
+    participant BUS as StreamBus
+    participant LLM as LLM Service (agentic)
+    participant TR as ToolRegistry
+    participant RAG as rag_search
+    participant WEB as web_search
+    participant CLN as clean_thinking_tags()
+    participant FS as history.json
+
+    C->>R: POST /co_writer/edit_react\n{selected_text, instruction, mode, tools[], kb_names[]}
+    Note over R: _normalize_react_edit_tools()\nallowed: rag, web_search, brainstorm,\nreason, paper_search, code_execution
+    R->>EA: _run_react_edit(request, language, stream=bus)
+
+    EA->>EA: build edit prompt\n(mode + instruction + selected_text)
+    EA->>EA: refresh_config() — pick up latest Settings
+
+    Note over EA,LLM: Agentic tool loop (stream_llm with tools)
+    loop Until final edit or max iterations
+        EA->>LLM: prompt + available tool schemas
+        LLM-->>EA: thought + tool_call OR final edit
+        alt tool called
+            EA->>TR: dispatch(tool_name, args)
+            TR->>RAG: rag_search() or
+            TR->>WEB: web_search() etc.
+            TR-->>EA: tool observation
+            EA-->>BUS: emit tool_call + result events
+            EA->>LLM: inject observation
+        end
+    end
+
+    LLM-->>EA: final edited text (streamed tokens)
+    EA-->>BUS: emit content events
+    EA->>CLN: clean_thinking_tags(raw_output)
+    CLN-->>EA: edited_text
+    EA-->>BUS: emit result
+
+    EA->>FS: append operation_record to history.json
+    BUS-->>C: streamed events OR blocking response
+
+    Note over C,R: /edit_react/stream — SSE streaming variant\nuses same _run_react_edit() via AsyncGenerator
+```
+
+---
+
+## 14. Module Dependency Hierarchy
 
 The six strict dependency layers guarantee that inner layers never import outer
 ones. TutorBot is a parallel system with its own stack.
