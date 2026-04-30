@@ -101,6 +101,15 @@ deeptutor serve --port 8001
 | `deeptutor/plugins/loader.py`       | Plugin discovery from manifest.yaml  |
 | `deeptutor_cli/main.py`             | Typer CLI entry point                |
 | `deeptutor/api/routers/unified_ws.py` | Unified WebSocket endpoint         |
+| `deeptutor/services/config/embedding_endpoint.py` | Embedding endpoint URL normalisation & provider defaults |
+| `deeptutor/services/config/model_catalog.py` | Embedding/LLM provider catalog with persisted normalisation |
+| `deeptutor/services/embedding/client.py` | Unified embedding client; validates endpoint before indexing |
+| `deeptutor/services/rag/pipelines/llamaindex/pipeline.py` | LlamaIndex RAG orchestration with per-call state refresh |
+| `deeptutor/services/rag/pipelines/llamaindex/storage.py` | Persisted index storage + invalid-vector detection |
+| `deeptutor/services/rag/pipelines/llamaindex/errors.py` | RAG error classification → `needs_reindex` hints |
+| `deeptutor/services/memory/service.py` | User memory (PROFILE.md / SUMMARY.md) with thinking-tag cleanup |
+| `deeptutor/agents/solve/main_solver.py` | Deep Solve orchestrator |
+| `deeptutor/agents/solve/agents/solver_agent.py` | Deep Solve ReAct solver |
 
 ## Plugin Development
 
@@ -153,3 +162,37 @@ lists in `requirements/*.txt` for Docker/CI installs without source code.
 .[dev]            — .[server] + test/lint tools
 .[all]            — Everything above
 ```
+
+## Notable Behaviour (v1.3.2+)
+
+### Embedding Endpoint Transparency
+
+Embedding adapters POST to the URL stored in Settings exactly — no hidden path
+appending at request time. `services/config/embedding_endpoint.py` normalises
+legacy `/v1`-style base URLs to their full endpoint form on catalog load and
+persists the result. The `EmbeddingClient` rejects known-provider URLs that
+point to a root/base path before indexing starts.
+
+### RAG State Refresh
+
+`LlamaIndexPipeline.initialize()`, `search()`, and `add()` all call
+`reconfigure_embedding()` before use, and the `CustomEmbedding` adapter
+recreates the underlying client whenever the resolved runtime config changes.
+This means Settings changes take effect without restarting the server.
+
+Persisted indexes are validated for null or non-finite vectors before retrieval.
+An invalid index returns `{"needs_reindex": true}` with a user-facing
+explanation rather than a raw exception.
+
+### Memory Thinking-Tag Cleanup
+
+All writes to `PROFILE.md` and `SUMMARY.md` pass through `clean_thinking_tags()`
+after code-fence stripping, preventing `<think>` / `<thinking>` scratchpad
+blocks from reasoning models from being persisted. Existing files containing
+these tags are cleaned and rewritten on the next read.
+
+### Deep Solve Wiring
+
+`MainSolver` no longer passes the stale `attachments` keyword to
+`SolverAgent.process()`; attachments are forwarded only on the planner and
+replan calls that accept them.
