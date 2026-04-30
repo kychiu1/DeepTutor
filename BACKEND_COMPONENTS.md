@@ -1,6 +1,8 @@
 # DeepTutor Backend Components
 
 > Architecture reference for the rework. Generated from codebase exploration.
+> Last updated for **v1.3.2**.
+> For per-feature Mermaid flow diagrams see **[ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md)**.
 
 ---
 
@@ -128,7 +130,7 @@ All in `deeptutor/core/` — imported by virtually every other module.
 | Package | Key Classes | Role |
 |---------|-------------|------|
 | `agents/chat/` | `ChatAgent`, `SessionManager`, `AgenticPipeline` | Lightweight chat with optional RAG |
-| `agents/solve/` | `MainSolver`, `PlannerAgent`, `SolverAgent`, `WriterAgent`, `SolverSessionManager` | Multi-step problem solving pipeline |
+| `agents/solve/` | `MainSolver`, `PlannerAgent`, `SolverAgent`, `WriterAgent`, `SolverSessionManager` | Multi-step problem solving pipeline. `MainSolver` no longer forwards stale `attachments` kwarg to `SolverAgent.process()` (v1.3.2 fix). |
 | `agents/question/` | `AgentCoordinator`, `IdeaAgent`, `QuestionGenerator`, `FollowupAgent` | Exam question generation |
 | `agents/research/` | `ResearchPipeline`, `DecomposeAgent`, `ResearchAgent`, `NoteAgent`, `ReportingAgent`, `CitationManager` | Deep research with citation tracking |
 | `agents/visualize/` | `VisualizationPipeline`, `AnalysisAgent`, `CodeGeneratorAgent`, `ReviewAgent` | Data visualisation generation |
@@ -193,17 +195,22 @@ Manages active turn lifecycle: creation, cancellation, resume, subscription fan-
 ### Embedding (`services/embedding/`)
 | File | Purpose |
 |------|---------|
-| `client.py` | Unified embedding client |
+| `client.py` | Unified embedding client. Validates that the configured endpoint is not a root/base path for known providers before indexing starts; recreates the client when resolved runtime config changes (v1.3.2) |
 | `config.py` | Embedding configuration |
-| `adapters/` | OpenAI, Azure, Cohere, Jina, Ollama, SiliconFlow, Aliyun, Qwen, DashScope |
-| `validation.py` | Batch validation |
+| `adapters/openai_sdk.py` | OpenAI SDK adapter |
+| `adapters/openai_compatible.py` | Exact-URL HTTP adapter; now used by OpenRouter (v1.3.2) |
+| `adapters/` | Cohere, Jina, Ollama, SiliconFlow, Aliyun, Qwen, DashScope |
+| `validation.py` | Batch validation (shared by indexing, retrieval, and connection tests) |
 
 ### RAG (`services/rag/`)
 | File | Purpose |
 |------|---------|
 | `service.py` | Main RAG service with event streaming |
 | `factory.py` | Pipeline factory |
-| `pipelines/llamaindex/` | LlamaIndex pipeline: document loading, chunking, vector storage |
+| `pipelines/llamaindex/pipeline.py` | LlamaIndex orchestration; `initialize`, `search`, and `add` all call `reconfigure_embedding()` before use so Settings changes take effect without a restart (v1.3.2) |
+| `pipelines/llamaindex/storage.py` | Vector index persistence; validates stored vectors for null/non-finite/shape issues before retrieval; returns `{"needs_reindex": true}` for invalid indexes instead of raw exceptions (v1.3.2) |
+| `pipelines/llamaindex/embedding_adapter.py` | LlamaIndex `CustomEmbedding` bridge; fingerprints resolved config and recreates the client when it changes (v1.3.2) |
+| `pipelines/llamaindex/errors.py` | RAG error classification; maps known failure strings (NumPy null-vector, shape mismatch, invalid persisted index) to structured `needs_reindex` responses (v1.3.2) |
 | `smart_retriever.py` | Advanced retrieval strategies |
 | `embedding_signature.py` | Embedding model version fingerprinting |
 | `index_versioning.py` | Index version management |
@@ -221,7 +228,7 @@ Manages active turn lifecycle: creation, cancellation, resume, subscription fan-
 ### Other Services
 | Path | Purpose |
 |------|---------|
-| `services/memory/service.py` | Two-file memory system (`SUMMARY.md`, `PROFILE.md`) |
+| `services/memory/service.py` | Two-file memory system (`SUMMARY.md`, `PROFILE.md`). All writes pass through `clean_thinking_tags()` after code-fence stripping; existing files with thinking tags are cleaned and rewritten on the next read (v1.3.2) |
 | `services/notebook/service.py` | Notebook JSON storage |
 | `services/search/` | Web search providers (Brave, Tavily, Jina, DuckDuckGo, Perplexity, Exa, Serper, Baidu, Searxng, OpenRouter) |
 | `services/search/consolidation.py` | Merge results from multiple search providers |
@@ -232,9 +239,10 @@ Manages active turn lifecycle: creation, cancellation, resume, subscription fan-
 | `services/prompt/manager.py` | YAML prompt template loading & rendering |
 | `services/config/loader.py` | YAML config loading |
 | `services/config/env_store.py` | Environment variable accessor with fallbacks |
-| `services/config/model_catalog.py` | Model capability catalog |
+| `services/config/model_catalog.py` | Model capability catalog; persists normalised embedding endpoint URLs on load (v1.3.2) |
 | `services/config/provider_runtime.py` | Provider runtime specs |
 | `services/config/context_window_detection.py` | Model context window size detection |
+| `services/config/embedding_endpoint.py` | Embedding endpoint URL helpers: provider aliases, default full-endpoint URLs, and `normalize_embedding_endpoint_for_display()` for legacy base-URL migration (v1.3.2) |
 | `services/tutorbot/manager.py` | TutorBot lifecycle management |
 
 ---
@@ -572,7 +580,7 @@ LLM_API_VERSION=
 EMBEDDING_BINDING=openai
 EMBEDDING_MODEL=text-embedding-3-large
 EMBEDDING_API_KEY=sk-...
-EMBEDDING_HOST=https://api.openai.com/v1/embeddings
+EMBEDDING_HOST=https://api.openai.com/v1/embeddings  # full endpoint URL, not a base (v1.3.2)/embeddings
 EMBEDDING_DIMENSION=
 EMBEDDING_SEND_DIMENSIONS=
 
