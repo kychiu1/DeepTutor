@@ -1,6 +1,7 @@
 # DeepTutor — Developer Quick-Start
 
 > For comprehensive architecture detail see **[BACKEND_COMPONENTS.md](./BACKEND_COMPONENTS.md)**.
+> For per-feature Mermaid flow diagrams see **[ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md)**.
 
 Current version: **v1.3.2**
 

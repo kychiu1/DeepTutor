@@ -2,6 +2,7 @@
 
 > Architecture reference for the rework. Generated from codebase exploration.
 > Last updated for **v1.3.2**.
+> For per-feature Mermaid flow diagrams see **[ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md)**.
 
 ---
 
